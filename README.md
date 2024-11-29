@@ -1,0 +1,1 @@
+A service for messaging on Go using WebSocket
