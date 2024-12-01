@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -20,6 +21,8 @@ var (
 type Config struct {
 	AllowedOrigins []string `json:"allowed_origins"`
 	Port           int      `json:"port"`
+	RateLimit      int      `json:"rate_limit"`
+	Timeout        int      `json:"timeout"`
 }
 
 func loadConfig(filename string) (Config, error) {
@@ -47,8 +50,11 @@ func checkOrigin(r *http.Request) bool {
 }
 
 type Client struct {
-	conn *websocket.Conn
-	send chan []byte
+	conn         *websocket.Conn
+	send         chan []byte
+	lastActive   time.Time
+	messageCount int
+	rateLimit    int
 }
 
 type Hub struct {
@@ -78,16 +84,25 @@ func (h *Hub) run() {
 	}
 }
 
-func (c *Client) read() {
+func (c *Client) read(timeout time.Duration) {
 	defer func() {
 		c.conn.Close()
 	}()
 	for {
+		c.conn.SetReadDeadline(time.Now().Add(timeout))
 		_, msg, err := c.conn.ReadMessage()
 		if err != nil {
 			break
 		}
+
+		c.messageCount++
+		if c.messageCount > c.rateLimit {
+			log.Println("Rate limit exceeded for client, closing connection.")
+			break
+		}
+
 		hub.broadcast <- msg
+		c.lastActive = time.Now()
 	}
 }
 
@@ -102,18 +117,18 @@ func (c *Client) write() {
 	}
 }
 
-func handleConnection(w http.ResponseWriter, r *http.Request) {
+func handleConnection(w http.ResponseWriter, r *http.Request, rateLimit int, timeout time.Duration) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("Error during connection upgrade:", err)
 		return
 	}
-	client := &Client{conn: conn, send: make(chan []byte)}
+	client := &Client{conn: conn, send: make(chan []byte), lastActive: time.Now(), rateLimit: rateLimit}
 	hub.mu.Lock()
 	hub.clients[client] = true
 	hub.mu.Unlock()
 
-	go client.read()
+	go client.read(timeout)
 	go client.write()
 }
 
@@ -134,7 +149,9 @@ func main() {
 
 	go hub.run()
 
-	http.HandleFunc("/ws", handleConnection)
+	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		handleConnection(w, r, config.RateLimit, time.Duration(config.Timeout)*time.Second)
+	})
 
 	addr := fmt.Sprintf(":%d", config.Port)
 	log.Printf("Запуск сервера на порту %d...", config.Port)
