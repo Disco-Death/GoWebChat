@@ -1,0 +1,8 @@
+{
+    "allowed_origins": [
+        "http://localhost:8080"
+    ],
+    "port": 8080,
+    "rate_limit": 10,
+    "timeout": 300
+}

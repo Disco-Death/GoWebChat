@@ -21,5 +21,6 @@ go.work.sum
 # env file
 .env
 
-# config file
+# config files (not example)
 config*.json
+!config-example.json
